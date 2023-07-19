@@ -3,7 +3,9 @@ from face_feature_extract import models
 from face_cluster.face_cluster_by_infomap import cluster_main
 from face_feature_extract.extract_feature import extract_fature
 from tools.utils import Timer
-
+import logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('main')
 
 parser = argparse.ArgumentParser(description='Face Cluster')
 parser.add_argument('--is_cuda', default='True', type=str)
@@ -46,7 +48,7 @@ if __name__ == '__main__':
         args = parser.parse_args()
         label_path = None
         pred_label_path = None
-        print('=> Use cuda ?: {}'.format(args.is_cuda))
+        logger.info('=> Use cuda ?: {}'.format(args.is_cuda))
         with Timer('Extract Feature'):
             extract_features = extract_fature(args)
         if eval(args.is_evaluate):
@@ -55,4 +57,4 @@ if __name__ == '__main__':
             args.knn_method = 'faiss-cpu'
         with Timer('Face Cluster'):
             cluster_main(args, extract_features)
-        print("=> Face cluster done! The cluster results have been saved in {}".format(args.output_picture_path))
+        logger.info("=> Face cluster done! The cluster results have been saved in {}".format(args.output_picture_path))

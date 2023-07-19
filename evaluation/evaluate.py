@@ -8,6 +8,8 @@ import numpy as np
 from evaluation import metrics
 from tools.utils import Timer, TextColors
 
+import logging
+logger = logging.getLogger('main.evaluate')
 
 def _read_meta(fn):
     labels = list()
@@ -22,14 +24,14 @@ def _read_meta(fn):
 
 def evaluate(gt_labels, pred_labels, metric='pairwise'):
     if isinstance(gt_labels, str) and isinstance(pred_labels, str):
-        print('[gt_labels] {}'.format(gt_labels))
-        print('[pred_labels] {}'.format(pred_labels))
+        logger.info('[gt_labels] {}'.format(gt_labels))
+        logger.info('[pred_labels] {}'.format(pred_labels))
         gt_labels, gt_lb_set = _read_meta(gt_labels)
         pred_labels, pred_lb_set = _read_meta(pred_labels)
 
-        print('#inst: gt({}) vs pred({})'.format(len(gt_labels),
+        logger.info('#inst: gt({}) vs pred({})'.format(len(gt_labels),
                                                  len(pred_labels)))
-        print('#cls: gt({}) vs pred({})'.format(len(gt_lb_set),
+        logger.info('#cls: gt({}) vs pred({})'.format(len(gt_lb_set),
                                                 len(pred_lb_set)))
 
     metric_func = metrics.__dict__[metric]
@@ -38,11 +40,11 @@ def evaluate(gt_labels, pred_labels, metric='pairwise'):
                                              TextColors.ENDC)):
         result = metric_func(gt_labels, pred_labels)
     if isinstance(result, np.float):
-        print('{}{}: {:.4f}{}'.format(TextColors.OKGREEN, metric, result,
+        logger.info('{}{}: {:.4f}{}'.format(TextColors.OKGREEN, metric, result,
                                       TextColors.ENDC))
     else:
         ave_pre, ave_rec, fscore = result
-        print('{}ave_pre: {:.4f}, ave_rec: {:.4f}, fscore: {:.4f}{}'.format(
+        logger.info('{}ave_pre: {:.4f}, ave_rec: {:.4f}, fscore: {:.4f}{}'.format(
             TextColors.OKGREEN, ave_pre, ave_rec, fscore, TextColors.ENDC))
 
 

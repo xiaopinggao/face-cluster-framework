@@ -9,7 +9,9 @@ import pickle
 from PIL import Image
 import multiprocessing as mp
 import json
-
+from tqdm import tqdm
+import logging
+logger = logging.getLogger('main.utils')
 
 class TextColors:
     HEADER = '\033[35m'
@@ -33,7 +35,7 @@ class Timer():
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.verbose:
-            print('[Time] {} consumes {:.4f} s'.format(
+            logger.info('[Time] {} consumes {:.4f} s'.format(
                 self.name,
                 time.time() - self.start))
         return exc_type is None
@@ -43,7 +45,7 @@ def init_processes(addr, port, gpu_num, backend):
     comm = MPI.COMM_WORLD
     size = comm.Get_size()
     rank = comm.Get_rank()
-    print(rank, size)
+    logger.info(rank, size)
     if mp.get_start_method(allow_none=True) != 'spawn':
         mp.set_start_method('spawn')
     torch.cuda.set_device(rank % gpu_num)
@@ -52,7 +54,7 @@ def init_processes(addr, port, gpu_num, backend):
     os.environ['WORLD_SIZE'] = str(size)
     os.environ['RANK'] = str(rank)
     dist.init_process_group(backend)
-    print('initialize {} successfully (rank {})'.format(backend, rank))
+    logger.info('initialize {} successfully (rank {})'.format(backend, rank))
     return rank, size
 
 
@@ -99,7 +101,7 @@ def save_ckpt(state, ckpt, epoch, is_best):
     if folder != '' and not os.path.exists(folder):
         os.makedirs(folder)
     path = os.path.join(folder, fn)
-    print('saving to {}'.format(path))
+    logger.info('saving to {}'.format(path))
     torch.save(state, '{}'.format(path))
     if is_best:
         best_fn = os.path.join(folder, 'model_best.pth.tar')
@@ -113,28 +115,31 @@ def load_ckpt(path, model, ignores=[], strict=True, optimizer=None):
         return storage.cuda()
 
     if os.path.isfile(path):
-        print("=> loading checkpoint '{}'".format(path))
+        logger.info("=> loading checkpoint '{}'".format(path))
         checkpoint = torch.load(path, map_location=map_func)
+        logger.info("load checkpoint done")
         if len(ignores) > 0:
             assert optimizer == None
             keys = set(checkpoint['state_dict'].keys())
             for ignore in ignores:
                 if ignore in keys:
-                    print('ignoring {}'.format(ignore))
+                    logger.info('ignoring {}'.format(ignore))
                     del checkpoint['state_dict'][ignore]
                 else:
                     raise ValueError(
                         'cannot find {} in load_path'.format(ignore))
+        logger.info("load_state_dict")
         model.load_state_dict(checkpoint['state_dict'], strict=strict)
+        logger.info("load_state_dict done")
         if not strict:
             pretrained_keys = set(checkpoint['state_dict'].keys())
             model_keys = set([k for k, _ in model.named_parameters()])
             for k in model_keys - pretrained_keys:
-                print('warning: {} not loaded'.format(k))
+                logger.info('warning: {} not loaded'.format(k))
         if optimizer != None:
             assert len(ignores) == 0
             optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (step {})".format(
+            logger.info("=> loaded checkpoint '{}' (step {})".format(
                 path, checkpoint['epoch']))
             return checkpoint['epoch'], checkpoint['best_prec1']
     else:
@@ -146,7 +151,7 @@ def simplify_ckpt(path, opath='', ignores=[]):
         return storage.cuda()
 
     if os.path.isfile(path):
-        print("=> loading checkpoint '{}'".format(path))
+        logger.info("=> loading checkpoint '{}'".format(path))
         checkpoint = torch.load(path, map_location=map_func)
         keys = list(checkpoint.keys())
         for key in keys:
@@ -157,17 +162,17 @@ def simplify_ckpt(path, opath='', ignores=[]):
             keys = set(checkpoint['state_dict'].keys())
             for ignore in ignores:
                 if ignore in keys:
-                    print('ignoring {}'.format(ignore))
+                    logger.info('ignoring {}'.format(ignore))
                     del checkpoint['state_dict'][ignore]
                 else:
                     for k in keys:
                         if k.find('base') < 0:
-                            print(k, checkpoint['state_dict'][k].shape)
+                            logger.info(k, checkpoint['state_dict'][k].shape)
                     raise ValueError(
                         'cannot find {} in load_path'.format(ignore))
         if opath == '':
             opath = path + '_simplified'
-        print("=> saving simplified checkpoint to '{}'".format(opath))
+        logger.info("=> saving simplified checkpoint to '{}'".format(opath))
         torch.save(checkpoint, opath)
     else:
         assert False, "=> no checkpoint found at '{}'".format(path)
@@ -210,9 +215,10 @@ def get_img(filepath, is_evaluate=False):
     picture_path = []
     label_list = []
     label = 0
+    logger.info("loading files in {}".format(filepath))
     for root, dirs, files in os.walk(filepath):
         if len(files) > 0:
-            for file in files:
+            for file in tqdm(files):
                 path = os.path.join(root + '/' + file)
                 with Image.open(path) as img:
                     img = img.convert('RGB')
@@ -240,7 +246,7 @@ def save_imgs(imgs, ofolder):
     for i, img in enumerate(imgs):
         opath = os.path.join(ofolder, "{}.jpg".format(i))
         if not os.path.exists(os.path.dirname(opath)):
-            print(opath)
+            logger.info(opath)
             os.makedirs(os.path.dirname(opath))
         img.save(opath, "JPEG")
     else:
@@ -266,12 +272,12 @@ def read_feat(path, inst_num, feat_dim, dtype=np.float32, verbose=False):
     if feat_dim > 1:
         probs = probs.reshape(inst_num, feat_dim)
     if verbose:
-        print('[{}] shape: {}'.format(path, probs.shape))
+        logger.info('[{}] shape: {}'.format(path, probs.shape))
     return probs
 
 
 def write_feat(ofn, features):
-    print('save features to', ofn)
+    logger.info('save features to', ofn)
     features.tofile(ofn)
 
 
@@ -310,5 +316,5 @@ def read_meta(fn_meta, start_pos=0, verbose=True):
     inst_num = len(idx2lb)
     cls_num = len(lb2idxs)
     if verbose:
-        print('[{}] #cls: {}, #inst: {}'.format(fn_meta, cls_num, inst_num))
+        logger.info('[{}] #cls: {}, #inst: {}'.format(fn_meta, cls_num, inst_num))
     return lb2idxs, idx2lb

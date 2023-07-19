@@ -9,9 +9,12 @@ from multiprocessing import Pool
 import multiprocessing as mp
 import os
 import shutil
+import psutil
 from tools.utils import Timer, mkdir_if_no_exist, l2norm, intdict2ndarray, read_meta
 from evaluation import evaluate, accuracy
 
+import logging
+logger = logging.getLogger('main.face_cluster_by_infomap')
 
 class knn():
     def __init__(self, feats, k, index_path='', verbose=True):
@@ -66,11 +69,12 @@ class knn_faiss(knn):
         with Timer('[{}] build index {}'.format(knn_method, k), verbose):
             knn_ofn = index_path + '.npz'
             if os.path.exists(knn_ofn):
-                print('[{}] read knns from {}'.format(knn_method, knn_ofn))
+                logger.info('[{}] read knns from {}'.format(knn_method, knn_ofn))
                 self.knns = np.load(knn_ofn)['data']
             else:
                 feats = feats.astype('float32')
                 size, dim = feats.shape
+                logger.info('feats.shape size: {}, dim: {}'.format(size, dim))
                 if knn_method == 'faiss-gpu':
                     import math
                     i = math.ceil(size/1000000)
@@ -87,11 +91,13 @@ class knn_faiss(knn):
             if os.path.exists(knn_ofn):
                 pass
             else:
-                sims, nbrs = index.search(feats, k=k)
+                sims, nbrs = index.search(feats, k=k) # sims是向量的内积，变换成距离需要做1-sims
+                print("sims:{}, nbrs:{}".format(sims, nbrs))
                 # torch.cuda.empty_cache()
                 self.knns = [(np.array(nbr, dtype=np.int32),
                               1 - np.array(sim, dtype=np.float32))
                              for nbr, sim in zip(nbrs, sims)]
+                print("self.knns:{}".format(self.knns))
 
 
 def knns2ordered_nbrs(knns, sort=True):
@@ -140,16 +146,21 @@ def cluster_by_infomap(nbrs, dists, args):
     with Timer('get links', verbose=True):
         single, links = get_links(single=single, links=links, nbrs=nbrs, dists=dists, args=args)
 
+    logger.info('RAM used {}MB'.format(psutil.virtual_memory()[3]/1000000))
+    logger.info("start copying links")
     infomapWrapper = infomap.Infomap("--two-level --directed")
     for (i, j), sim in tqdm(links.items()):
         _ = infomapWrapper.addLink(int(i), int(j), sim)
 
+    logger.info('RAM used {}MB'.format(psutil.virtual_memory()[3]/1000000))
     # 聚类运算
+    logger.info("start running infomap")
     infomapWrapper.run()
 
     label2idx = {}
     idx2label = {}
 
+    logger.info('RAM used {}MB'.format(psutil.virtual_memory()[3]/1000000))
     # 聚类结果统计
     for node in infomapWrapper.iterTree():
         # node.physicalId 特征向量的编号
@@ -164,17 +175,17 @@ def cluster_by_infomap(nbrs, dists, args):
         if k == 0:
             node_count += len(v[2:])
             label2idx[k] = v[2:]
-            # print(k, v[0:])
+            # logger.info(k, v[0:])
         else:
             node_count += len(v[1:])
             label2idx[k] = v[1:]
-            # print(k, v[0:])
+            # logger.info(k, v[0:])
 
     # 孤立点个数
-    print("=> Single cluster:{}".format(len(single)))
+    logger.info("=> Single cluster:{}".format(len(single)))
 
     keys_len = len(list(label2idx.keys()))
-    # print(keys_len)
+    # logger.info(keys_len)
 
     # 孤立点放入到结果中
     for single_node in single:
@@ -182,10 +193,36 @@ def cluster_by_infomap(nbrs, dists, args):
         label2idx[keys_len] = [single_node]
         keys_len += 1
 
-    print("=> Total clusters:{}".format(keys_len))
+    logger.info("=> Total clusters:{}".format(keys_len))
 
     idx_len = len(list(idx2label.keys()))
-    print("=> Total nodes:{}".format(idx_len))
+    logger.info("=> Total nodes:{}".format(idx_len))
+    return idx2label, label2idx
+
+
+
+def get_dist_nbr(features, args):
+
+    index = knn_faiss(feats=features, k=args.k, knn_method=args.knn_method)
+    knns = index.get_knns()
+    dists, nbrs = knns2ordered_nbrs(knns)
+    print(dists)
+    print(nbrs)
+    return dists, nbrs
+
+
+def cluster_main(args, extract_features):
+    # features = np.fromfile(feature_path, dtype=np.float32)
+    features = extract_features.reshape(-1, 256)
+    features = l2norm(features)
+
+    print(features.shape)
+    print(features)
+    print("distance{}".format(np.dot(features[0], features[1])))
+    dists, nbrs = get_dist_nbr(features, args=args)
+    logger.info('dists.shape:{}, nbrs.shape:{}'.format(dists.shape, nbrs.shape))
+    idx2label, label2idx = cluster_by_infomap(nbrs, dists, args)
+
 
     # 保存聚类结果
     if eval(args.save_result):
@@ -201,9 +238,19 @@ def cluster_by_infomap(nbrs, dists, args):
         for metric in args.metrics:
             evaluate(gt_labels, pred_labels, metric)
 
+    # merge similar clusters
+    #for label1 in label2idx:
+    #    for label2 in label2idx:
+    #        if label1 == label2:
+    #            pass
+            #logger.info('cluster1 {} - cluster2 {}, distance:{}'.format(label1, label2, dists[label2idx[label1][0]][label2idx[label2][0]]))
+    print(label2idx[0])
+    print(dists.shape)
+    print(dists)
+
     # 归档图片
     if args.output_picture_path is not None:
-        print("=> Start copy pictures to the output path {} ......".format(args.output_picture_path))
+        logger.info("=> Start copy pictures to the output path {} ......".format(args.output_picture_path))
         with open('data/tmp/pic_path', 'r') as f:
             content = f.read()
             picture_path_dict = json.loads(content)
@@ -218,21 +265,3 @@ def cluster_by_infomap(nbrs, dists, args):
                 picture_path = picture_path_dict[str(idx)]
                 shutil.copy(picture_path, picture_reuslt_path)
                 shutil.copy(picture_path, tmp_pth)
-
-
-def get_dist_nbr(features, args):
-    # features = np.fromfile(feature_path, dtype=np.float32)
-    features = features.reshape(-1, 256)
-    features = l2norm(features)
-
-    index = knn_faiss(feats=features, k=args.k, knn_method=args.knn_method)
-    knns = index.get_knns()
-    dists, nbrs = knns2ordered_nbrs(knns)
-    return dists, nbrs
-
-
-def cluster_main(args, extract_features):
-    dists, nbrs = get_dist_nbr(features=extract_features, args=args)
-    print(dists.shape, nbrs.shape)
-    cluster_by_infomap(nbrs, dists, args)
-

@@ -2,7 +2,9 @@ import argparse
 import os
 import numpy as np
 import time
-
+from tqdm import tqdm
+import psutil
+import gc
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
@@ -11,6 +13,9 @@ import torchvision.transforms as transforms
 from face_feature_extract import models
 from tools.utils import AverageMeter, load_ckpt, bin_loader
 from face_feature_extract.datasets import GenDataset
+
+import logging
+logger = logging.getLogger('main.extract_feature')
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -49,8 +54,9 @@ def extract_fature(args):
     # args = parser.parse_args()
 
     # assert args.output_path.endswith('.bin')
-    print("************Init the face feature extract model***************")
-    print("=> creating model '{}'".format(args.arch))
+    logger.info('RAM used {}MB'.format(psutil.virtual_memory()[3]/1000000))
+    logger.info("************Init the face feature extract model***************")
+    logger.info("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch](feature_dim=args.feature_dim)
     model = IdentityMapping(model)
 
@@ -87,13 +93,20 @@ def extract_fature(args):
                              num_workers=args.workers,
                              pin_memory=True)
 
-    print("=> Extracting face features with the input path {}......".format(args.input_picture_path))
+    logger.info('RAM used {}MB'.format(psutil.virtual_memory()[3]/1000000))
+    logger.info("=> Extracting face features with the input path {}......".format(args.input_picture_path))
     features = extract(test_loader, model)
-    print("=> Extract face features done!")
-    print("=> The total face：{}".format(str(features.shape[0])))
+    logger.info("=> Extract face features done!")
+    logger.info("=> The total face：{}".format(str(features.shape[0])))
     assert features.shape[1] == args.feature_dim
 
-    print("=> Save the extracted features to {}".format(args.output_path))
+    logger.info('RAM used before gc: {}MB'.format(psutil.virtual_memory()[3]/1000000))
+    # sometimes the loaded images are too big, release it manually
+    del(test_loader)
+    gc.collect()
+
+    logger.info('RAM used after gc: {}MB'.format(psutil.virtual_memory()[3]/1000000))
+    logger.info("=> Save the extracted features to {}".format(args.output_path))
     folder = os.path.dirname(args.output_path)
     if folder != '' and not os.path.exists(folder):
         os.makedirs(folder)
@@ -108,13 +121,15 @@ def extract(test_loader, model):
     features = []
     with torch.no_grad():
         end = time.time()
-        for i, input in enumerate(test_loader):
-            # compute output
-            output = model(input)
-            features.append(output.data.cpu().numpy())
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
+        with tqdm(total=len(test_loader)) as pbar:
+            for i, input in enumerate(test_loader):
+                # compute output
+                output = model(input)
+                features.append(output.data.cpu().numpy())
+                # measure elapsed time
+                batch_time.update(time.time() - end)
+                end = time.time()
+                pbar.update()
 
     return np.vstack(features)
 
