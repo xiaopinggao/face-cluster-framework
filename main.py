@@ -1,6 +1,6 @@
 import argparse
 from face_feature_extract import models
-from face_cluster.face_cluster_by_infomap import cluster_main
+from face_cluster.main_cluster import cluster_main
 from face_feature_extract.extract_feature import extract_fature
 from tools.utils import Timer
 import logging
@@ -41,6 +41,8 @@ parser.add_argument('--min_sim', default=0.5, type=float)
 parser.add_argument('--metrics', default=['pairwise', 'bcubed', 'nmi'], type=list)
 parser.add_argument('--label_path', default='data/tmp/test.meta', type=str)
 parser.add_argument('--save_result', default='False', type=str)
+parser.add_argument('--merge_cluster', default='False', type=str)
+parser.add_argument('--cluster_dist_thresh', default=0.65, type=float)
 
 if __name__ == '__main__':
     with Timer('All Steps'):
